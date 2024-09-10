@@ -4,7 +4,9 @@ import argparse
 from matplotlib.ticker import AutoMinorLocator
 import matplotlib.pyplot as plt
 import numpy as np
+from xarray import Dataset
 import xclim
+import xesmf as xe
 
 
 class store_dict(argparse.Action):
@@ -72,6 +74,48 @@ def convert_units(da, target_units):
             raise e
 
     return da
+
+
+def regrid(ds, ds_grid, method="conservative", **kwargs):
+    """Regrid `ds` to the grid of `ds_grid` using xESMF.
+
+    Parameters
+    ----------
+    ds : Union[xarray.DataArray, xarray.Dataset]
+        Input data
+    ds_grid : Union[xarray.DataArray, xarray.Dataset]
+        Target grid.
+    method : {"conservative", "bilinear", "nearest_s2d", "nearest_d2s"}, default "conservative"
+        Regridding method
+    **kwargs
+        Additional keyword arguments for xESMF.Regridder
+
+    Returns
+    -------
+    ds_regrid : Union[xarray.DataArray, xarray.Dataset]
+        Regridded xarray.DataArray or xarray.Dataset
+
+    Notes
+    -----
+    - The input and target grids should have the same coordinate names.
+    - Recommended using the "conservative" method for regridding from fine to course and "bilinear" for the opposite.
+    """
+    # Copy attributes
+    global_attrs = ds.attrs
+    if isinstance(ds, Dataset):
+        var_attrs = {var: ds[var].attrs for var in ds.data_vars}
+
+    # Regrid data
+    regridder = xe.Regridder(ds, ds_grid, method, **kwargs)
+    ds_regrid = regridder(ds)
+
+    # Update regridded data attributes
+    ds_regrid.attrs.update(global_attrs)
+    if isinstance(ds_regrid, Dataset):
+        for var in ds_regrid.data_vars:
+            ds_regrid[var].attrs.update(var_attrs[var])
+
+    return ds_regrid
 
 
 def plot_timeseries_scatter(
