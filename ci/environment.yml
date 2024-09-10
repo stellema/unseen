@@ -18,6 +18,7 @@ dependencies:
   - seaborn
   - xarray
   - xclim>=0.39.0
+  - xesmf
   - xskillscore
   - zarr
   - pip:
