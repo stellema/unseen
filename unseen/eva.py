@@ -1,14 +1,16 @@
 """Extreme value analysis functions."""
 
+import matplotlib.pyplot as plt
 from matplotlib import colormaps
 from matplotlib.dates import date2num
 from matplotlib.ticker import AutoMinorLocator
 import numpy as np
 from scipy.optimize import minimize
-from scipy.stats import genextreme, goodness_of_fit
+from scipy.stats import genextreme, goodness_of_fit, skew
 from scipy.stats.distributions import chi2
 import warnings
-from xarray import apply_ufunc, DataArray
+from xarray import apply_ufunc, DataArray, full_like, where
+import xclim
 
 
 def event_in_context(data, threshold, direction):
@@ -96,12 +98,12 @@ def penalised_sum(x):
     return total + penalty
 
 
-def nllf(theta, x, covariate=None):
+def nllf(dparams, x, covariate=None):
     """Penalised negative log-likelihood function.
 
     Parameters
     ----------
-    theta : tuple of floats
+    dparams : tuple of floats
         Distribution parameters (stationary or non-stationary)
     x : array_like
         Data to use in estimating the distribution parameters
@@ -120,24 +122,24 @@ def nllf(theta, x, covariate=None):
     can vary linearly with a covariate.
     The log-likelihood equations are based on Méndez et al. (2007).
     It is suitable for stationary or nonstationary distributions:
-        - theta = shape, loc, scale
-        - theta = shape, loc, loc1, scale, scale1
-    The nonstationary parameters are returned if `theta` incudes the location
+        - dparams = shape, loc, scale
+        - dparams = shape, loc, loc1, scale, scale1
+    The nonstationary parameters are returned if `dparams` incudes the location
     and scale trend parameters.
     A large finite penalty (instead of infinity) is applied for observations
     beyond the support of the distribution.
     The NLLF is not finite when the shape is nonzero and Z is negative because
     the PDF is zero (i.e., ``log(0)=inf)``).
     """
-    if len(theta) == 5:
+    if len(dparams) == 5:
         # Nonstationary GEV parameters
-        shape, loc0, loc1, scale0, scale1 = theta
+        shape, loc0, loc1, scale0, scale1 = dparams
         loc = loc0 + loc1 * covariate
         scale = scale0 + scale1 * covariate
 
     else:
         # Stationary GEV parameters
-        shape, loc, scale = theta
+        shape, loc, scale = dparams
 
     s = (x - loc) / scale
 
@@ -165,18 +167,70 @@ def nllf(theta, x, covariate=None):
     return total
 
 
+def gev_fit_start_1d(data, method):
+    """Generate initial parameter guesses for nonstationary fit."""
+    # Initial values of distribution parameters.
+
+    if not isinstance(method, str):
+        # User provided initial estimates
+        return method
+
+    if method == "scipy":
+        dparams_i = fit_stationary_gev(data)
+
+    elif method == "scipy_fitstart":
+        dparams_i = genextreme._fitstart(data)
+
+    elif method == "scipy_subset":
+        # Equivalent of generate_estimates=True
+        dparams_i = fit_stationary_gev(data[::2])
+
+    elif method == "LMM":
+        # L-moment estimates
+        scale = np.sqrt(6 * np.var(data)) / np.pi
+        location = data.mean() - 0.57722 * scale
+        dparams_i = [-0.1, location, scale]
+
+    elif method == "xclim_MLE":
+        da = DataArray(data, dims="time")
+        method_name = method.replace("xclim_", "").upper()
+        dparams_i = xclim.indices.stats.fit(da, "genextreme", method=method_name)
+        dparams_i[0] = -dparams_i[0]
+
+    elif method == "MM":
+        # Method of Moments
+        shape = skew(data) / 2
+        scale = np.std(data) / np.sqrt(6)
+        location = np.mean(data) - (scale * (0.5772 + np.log(2)))
+        dparams_i = (-shape, location, scale)
+
+    elif method == "LMM":
+
+        import lmoments3 as lm
+        from lmoments3 import distr
+
+        lmoments = lm.lmom_ratios(list(data), nmom=4)
+        params = distr.gev.lmom_fit(lmoments)
+        dparams_i = (params["c"], params["loc"], params["scale"])
+
+    elif method == "QM":
+        q1, q2, q3 = np.percentile(data, [25, 50, 75])
+        dparams_i = -0.1, q2, (q3 - q1) / 1.34
+
+    return dparams_i
+
+
 def fit_gev(
     data,
     core_dim="time",
     stationary=True,
     covariate=None,
+    fit_start="LMM",
     loc1=0,
     scale1=0,
     test_fit_goodness=False,
     relative_fit_test=None,
     alpha=0.05,
-    user_estimates=[],
-    generate_estimates=False,
     method="Nelder-Mead",
 ):
     """Estimate stationary or nonstationary GEV distribution parameters.
@@ -185,36 +239,38 @@ def fit_gev(
     ----------
     data : array_like
         Data to use in estimating the distribution parameters
-    core_dim : str, optional
-        Name of time/sample dimension in `data`. Default: "time".
-    stationary : bool, optional
-        Fit as a stationary GEV using `fit_stationary_gev`. Default: True.
+    core_dim : str, default "time"
+        Name of time/sample dimension in `data`
+    stationary : bool, default True
+        Fit as a stationary GEV using `fit_stationary_gev`
     covariate : array_like or str, optional
         A nonstationary covariate array or coordinate name
-    loc1, scale1 : float or None, optional
+    loc1, scale1 : float or None, default 0
         Initial guess of trend parameters. If None, the trend is fixed at zero.
-    test_fit_goodness : bool, optional
-        Test goodness of fit and attempt retry. Default False.
-    relative_fit_test : {None, 'lrt', 'aic', 'bic'}, optional
+    fit_start : {array-like, 'scipy', 'scipy_fitstart', 'scipy_subset', 'LMM', 'xclim_MLE', 'QM'}, default 'LMM'
+        Initial guess method/estimate of the shape, loc and scale parameters.
+    test_fit_goodness : bool, default False
+        Test goodness of fit and attempt retry
+    relative_fit_test : {None, 'LRT', 'AIC', 'BIC'}, default None
         Method to test relative fit of stationary and nonstationary models.
         The trend parameters are set to zero if the stationary fit is better.
-    alpha : float, optional
-        Goodness of fit p-value threshold. Default 0.05.
+    alpha : float, default 0.05
+        Goodness of fit p-value threshold
     user estimates: list, optional
         Initial guess of the shape, loc and scale parameters
-    generate_estimates : bool, optional
+    generate_estimates : bool, default False
         Generate initial parameter guesses using a data subset
-    method : str, optional
-        Optimization method for nonstationary fit {'Nelder-Mead', 'L-BFGS-B',
-        'TNC', 'SLSQP', 'Powell', 'trust-constr', 'COBYLA'}.
+    method : {'Nelder-Mead', 'L-BFGS-B',
+        'TNC', 'SLSQP', 'Powell', 'trust-constr', 'COBYLA'}, default 'Nelder-Mead'
+        Optimization method for nonstationary fit
 
     Returns
     -------
-    theta : xr.DataArray
+    dparams : xr.DataArray
         The GEV distribution parameters with the same dimensions as `data`
-        (excluding `core_dim`) and a new dimension `theta`:
-        If stationary, theta = (shape, loc, scale).
-        If nonstationary, theta = (shape, loc0, loc1, scale0, scale1).
+        (excluding `core_dim`) and a new dimension `dparams`:
+        If stationary, dparams = (shape, loc, scale).
+        If nonstationary, dparams = (shape, loc0, loc1, scale0, scale1).
 
     Notes
     -----
@@ -231,37 +287,35 @@ def fit_gev(
     """
     kwargs = locals()  # Function inputs
 
-    def _format_covariate(data, covariate, stationary, core_dim):
-        """Format or generate covariate ."""
-        if not stationary:
-            if isinstance(covariate, str):
-                # Select coordinate in data
-                covariate = data[covariate]
-            elif covariate is None:
-                # Guess covariate
-                if core_dim in data:
-                    covariate = data[core_dim]
-                else:
-                    covariate = np.arange(data.shape[0])
+    def _format_covariate(data, covariate, core_dim):
+        """Format or generate covariate."""
 
-            if covariate.dtype.kind not in set("buifc"):
-                # Convert dates to numbers
-                covariate = date2num(covariate)
+        if isinstance(covariate, str):
+            # Select coordinate in data
+            covariate = data[covariate]
 
-            if not isinstance(covariate, DataArray):
-                # Convert to DataArray with the same core_dim as data
-                covariate = DataArray(covariate, dims=[core_dim])
-        else:
-            covariate = 0  # Dummy covariate for apply_ufunc
+        elif covariate is None:
+            # Guess covariate
+            if core_dim in data:
+                covariate = data[core_dim]
+            else:
+                covariate = np.arange(data.shape[0])
+
+        if covariate.dtype.kind not in set("buifc"):
+            # Convert dates to numbers
+            covariate = date2num(covariate)
+
+        if not isinstance(covariate, DataArray):
+            # Convert to DataArray with the same core_dim as data
+            covariate = DataArray(covariate, dims=[core_dim])
 
         return covariate
 
-    def _fit(
+    def _fit_1d(
         data,
         covariate,
+        fit_start,
         core_dim,
-        user_estimates,
-        generate_estimates,
         loc1,
         scale1,
         stationary,
@@ -283,38 +337,45 @@ def fit_gev(
             if not stationary:
                 covariate = covariate[mask]
 
-        # Use genextreme to get stationary distribution parameters
-        theta = fit_stationary_gev(data, user_estimates, generate_estimates)
+        # Generate initial parameter guesses
+        dparams_i = gev_fit_start_1d(data, fit_start)
 
-        if not stationary:
+        # Use genextreme to get stationary distribution parameters
+        if stationary:
+            dparams = fit_stationary_gev(data, user_estimates=dparams_i)
+
+        else:
             # Use genextreme as initial guesses
-            shape, loc, scale = theta
+            shape, loc, scale = dparams_i
             # Temporarily reverse shape sign (scipy uses different sign convention)
-            theta_i = [-shape, loc, loc1, scale, scale1]
+            dparams_i = [-shape, loc, loc1, scale, scale1]
 
             # Optimisation bounds (scale parameter must be non-negative)
-            bounds = [(None, None)] * len(theta_i)
+            bounds = [(None, None)] * len(dparams_i)
             bounds[3] = (0, None)  # Positive scale parameter
             if loc1 is None:
-                theta_i[2] = 0
+                dparams_i[2] = 0
                 bounds[2] = (0, 0)  # Only allow trend in scale
             if scale1 is None:
-                theta_i[4] = 0
+                dparams_i[4] = 0
                 bounds[4] = (0, 0)  # Only allow trend in location
 
-            # Minimise the negative log-likelihood function to get optimal theta
+            # Minimise the negative log-likelihood function to get optimal dparams
             res = minimize(
                 nllf,
-                theta_i,
+                dparams_i,
                 args=(data, covariate),
                 method=method,
                 bounds=bounds,
             )
-            theta = res.x
+            dparams = res.x
+            # Reverse shape sign for consistency with scipy.stats results
+            dparams[0] *= -1
 
             if isinstance(relative_fit_test, str):
                 # Test relative fit of stationary and nonstationary models
                 # Negative log likelihood using genextreme parameters
+                shape, loc, scale = fit_stationary_gev(data, dparams_i)
                 L1 = nllf([-shape, loc, scale], data)
                 L2 = res.fun
 
@@ -326,37 +387,37 @@ def fit_gev(
                         f"{relative_fit_test} test failed. Returning stationary parameters."
                     )
                     # Return stationary parameters (genextreme.fit output) with no trend
-                    theta = [shape, loc, 0, scale, 0]
+                    dparams = [shape, loc, 0, scale, 0]
 
-            # Reverse shape sign for consistency with scipy.stats results
-            theta[0] *= -1
-
-        theta = np.array([i for i in theta], dtype="float64")
+        dparams = np.array([i for i in dparams], dtype="float64")
 
         if test_fit_goodness and stationary:
-            pvalue = check_gev_fit(data, theta, core_dim=core_dim)
+            pvalue = check_gev_fit(data, dparams, core_dim=core_dim)
 
             # Accept null distribution of the Anderson-darling test (same distribution)
             if np.all(pvalue < alpha):
                 if any(kwargs["user_estimates"]):
                     warnings.warn("GEV fit failed. Retrying without user_estimates.")
                     kwargs["user_estimates"] = [None, None, None]
-                    theta = _fit(data, covariate, **kwargs)
+                    dparams = _fit_1d(data, covariate, **kwargs)
                 elif not kwargs["generate_estimates"]:
                     warnings.warn(
                         "GEV fit failed. Retrying with generate_estimates=True."
                     )
                     kwargs["generate_estimates"] = True  # Also breaks loop
-                    theta = _fit(data, covariate, **kwargs)
+                    dparams = _fit_1d(data, covariate, **kwargs)
                 else:
                     # Return NaNs
-                    theta = theta * np.nan
+                    dparams = dparams * np.nan
                     warnings.warn("Data fit failed.")
-        return theta
+        return dparams
 
     data = kwargs.pop("data")
     covariate = kwargs.pop("covariate")
-    covariate = _format_covariate(data, covariate, stationary, core_dim)
+    if not stationary:
+        covariate = _format_covariate(data, covariate, core_dim)
+    else:
+        covariate = 0
 
     # Input core dimensions
     if core_dim is not None and hasattr(covariate, core_dim):
@@ -366,35 +427,50 @@ def fit_gev(
         # Covariate is a 1D array
         input_core_dims = [[core_dim], []]
 
-    # Expected output of theta
+    # Expected output of dparams
     n = 3 if stationary else 5
 
     # Fit data to distribution parameters
-    theta = apply_ufunc(
-        _fit,
+    dparams = apply_ufunc(
+        _fit_1d,
         data,
         covariate,
         input_core_dims=input_core_dims,
-        output_core_dims=[["theta"]],
+        output_core_dims=[["dparams"]],
         vectorize=True,
         dask="parallelized",
         kwargs=kwargs,
         output_dtypes=["float64"],
-        dask_gufunc_kwargs=dict(output_sizes={"theta": n}),
+        dask_gufunc_kwargs=dict(output_sizes={"dparams": n}),
     )
 
-    # Format output
-    if len(data.shape) == 1:
-        # Return a tuple of scalars instead of a data array
-        theta = np.array([i for i in theta], dtype="float64")
+    # Format output (consistent with xclim)
+    if stationary:
+        dparam_names = ["c", "loc", "scale"]
+    else:
+        dparam_names = ["c", "loc0", "loc1", "scale0", "scale1"]
+    dparams.coords["dparams"] = dparam_names
 
-    if isinstance(theta, DataArray):
-        if stationary:
-            coords = ["shape", "loc", "scale"]
-        else:
-            coords = ["shape", "loc0", "loc1", "scale0", "scale1"]
-        theta.coords["theta"] = coords
-    return theta
+    # Add coordinates for the distribution parameters and transpose to original shape (with dim -> dparams)
+    dparams.attrs = data.attrs.copy()
+    dist_name = "genextreme" if stationary else "genextreme nonstationary"
+    estimator = fit_start.upper() if isinstance(fit_start, str) else "User estimates"
+    attrs = dict(
+        long_name=f"{dist_name.capitalize()} parameters",
+        description=f"Parameters of the {dist_name} distribution",
+        method="MLE",
+        estimator=estimator,
+        scipy_dist="genextreme",
+        units="",
+        history=xclim.core.formatting.update_history(
+            f"Estimate distribution parameters by MLE method along dimension {core_dim}.",
+            new_name="fit",
+            data=data,
+        ),
+    )
+    dparams.attrs.update(attrs)
+
+    return dparams
 
 
 def check_gev_fit(data, params, core_dim="time", **kwargs):
@@ -434,7 +510,7 @@ def check_gev_fit(data, params, core_dim="time", **kwargs):
         _goodness_of_fit,
         data,
         params,
-        input_core_dims=[[core_dim], ["theta"]],
+        input_core_dims=[[core_dim], ["dparams"]],
         vectorize=True,
         kwargs=kwargs,
         dask="parallelized",
@@ -503,10 +579,12 @@ def unpack_gev_params(params, covariate=None):
         GEV parameters. If nonstationary, loc and scale are functions of the
         covariate.
     """
-
     if hasattr(params, "theta"):
+        params = params.rename({"theta": "dparams"})
+
+    if hasattr(params, "dparams"):
         # Select the correct dimension in a DataArray
-        params = [params.isel(theta=i) for i in range(params.theta.size)]
+        params = [params.isel(dparams=i) for i in range(params.dparams.size)]
 
     # Unpack GEV parameters
     if len(params) == 3:
@@ -519,6 +597,56 @@ def unpack_gev_params(params, covariate=None):
         loc = loc0 + loc1 * covariate
         scale = scale0 + scale1 * covariate
     return shape, loc, scale
+
+
+def get_best_GEV_paramaters(
+    da, dparams_s, dparams_ns, covariate, core_dim="sample", test="bic"
+):
+    """Select the best GEV model based on the relative fit test."""
+    # Stationary GEV negative log-likelihood
+    L1 = apply_ufunc(
+        nllf,
+        dparams_s,
+        da,
+        input_core_dims=[["dparams"], [core_dim]],
+        output_core_dims=[[]],
+        vectorize=True,
+        dask="parallelized",
+        output_dtypes=["float64"],
+    )
+    # Non-stationary GEV negative log-likelihood
+    L2 = apply_ufunc(
+        nllf,
+        dparams_ns,
+        da,
+        covariate,
+        input_core_dims=[["dparams"], [core_dim], [core_dim]],
+        output_core_dims=[[]],
+        vectorize=True,
+        dask="parallelized",
+        output_dtypes=["float64"],
+    )
+    # Relative fit test
+    rft = apply_ufunc(
+        check_gev_relative_fit,
+        da,
+        L1,
+        L2,
+        input_core_dims=[[core_dim], [], []],
+        output_core_dims=[[]],
+        kwargs=dict(test=test),
+        vectorize=True,
+        dask="parallelized",
+        output_dtypes=["float64"],
+    )
+    # Format stationary parameters to match non-stationary data shape
+    dparams = full_like(dparams_ns, 0)
+    for i, j in enumerate([0, 1, 3]):
+        dparams[dict(dparams=j)] = dparams_s.isel(dparams=i)
+
+    # Replace stationary parameters with non-stationary parameters where rft is True
+    dparams = where(rft, dparams_ns, dparams)
+    return dparams
 
 
 def get_return_period(event, params=None, covariate=None, **kwargs):
@@ -813,35 +941,64 @@ def plot_gev_return_curve(
     ax.grid()
 
 
-def plot_nonstationary_pdfs(ax, data, theta_s, theta_ns, covariate):
+def plot_nonstationary_pdfs(
+    data,
+    dparams_s,
+    dparams_ns,
+    covariate,
+    ax=None,
+    title=None,
+    units=None,
+    cmap="rainbow",
+    outfile=None,
+    legend=True,
+    lgd_kwargs=dict(loc="upper right", bbox_to_anchor=(1, 1), framealpha=0.3),
+):
     """Plot stationary and nonstationary GEV PDFs.
 
     Parameters
     ----------
-    ax : matplotlib.Axes
     data : array-like
         Data to plot the histogram
-    theta_s : tuple of floats
+    dparams_s : tuple of floats
         Stationary GEV parameters (shape, loc, scale)
-    theta_ns : tuple or array-like
+    dparams_ns : tuple or array-like
         Nonstationary GEV parameters (shape, loc0, loc1, scale0, scale1)
     covariate : array-like
-        Covariates values in which to plot the nonstationary PDFs
-
+        Covariate values in which to plot the nonstationary PDFs
+    ax : matplotlib.Axes
+        Axes on which to plot. By default, create a new figure
+    title : str, default None
+        Plot title
+    units : str, default None
+        Label for x-axis
+    cmap : str, default "rainbow"
+        Colormap to use for nonstationary PDF lines
+    outfile : str, default None
+    legend : bool, default True
+        Show the legend
+    lgd_kwargs : dict, default dict(loc="upper right", bbox_to_anchor=(1, 1), framealpha=0.3)
+        Additional keyword arguments to pass to `ax.legend`
 
     Returns
     -------
     ax : matplotlib.Axes
     """
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+
+    if title:
+        ax.set_title(title, loc="left")
+
     n = covariate.size
-    colors = colormaps["rainbow"](np.linspace(0, 1, n))
-    shape, loc, scale = unpack_gev_params(theta_ns, covariate)
+    colors = colormaps[cmap](np.linspace(0, 1, n))
+    shape, loc, scale = unpack_gev_params(dparams_ns, covariate)
 
     # Histogram.
     _, bins, _ = ax.hist(data, bins=40, density=True, alpha=0.5, label="Histogram")
 
     # Stationary GEV PDF
-    shape_s, loc_s, scale_s = theta_s
+    shape_s, loc_s, scale_s = dparams_s
     pdf_s = genextreme.pdf(bins, shape_s, loc=loc_s, scale=scale_s)
     ax.plot(bins, pdf_s, c="k", ls="--", lw=2.8, label="Stationary")
 
@@ -850,94 +1007,190 @@ def plot_nonstationary_pdfs(ax, data, theta_s, theta_ns, covariate):
         pdf_ns = genextreme.pdf(bins, shape, loc=loc[i], scale=scale[i])
         ax.plot(bins, pdf_ns, lw=1.6, c=colors[i], zorder=0, label=t)
 
-    ax.set_ylabel("Probability")
+    ax.set_xlabel(units)
+    ax.set_ylabel("Density")
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.legend(bbox_to_anchor=(1, 1))
+    ax.set_xmargin(1e-3)
+
+    if legend:
+        ax.legend(**lgd_kwargs)
+
+    if outfile:
+        plt.tight_layout()
+        plt.savefig(outfile, dpi=200, bbox_inches="tight")
     return ax
 
 
-def plot_nonstationary_return_curve(
-    ax, return_periods, theta_s, theta_ns, covariate, dim="time"
+def plot_exceedance_probability_curve(
+    return_periods,
+    dparams_s,
+    dparams_ns=None,
+    covariate=None,
+    dim="time",
+    ax=None,
+    title=None,
+    units=None,
+    cmap="rainbow",
+    outfile=None,
+    legend=True,
+    **lgd_kwargs,
 ):
     """Plot stationary and nonstationary return period curves.
 
     Parameters
     ----------
-    ax : matplotlib.Axes
     return_periods : array-like
-        Return periods to plot
-    theta_s : array-like or tuple of floats
+        Return periods to plot (x-axis)
+    dparams_s : tuple or array-like
         Stationary GEV parameters (shape, loc, scale)
-    theta_ns : array-like or tuple of floats
+    dparams_ns : tuple or array-like, optional
         Nonstationary GEV parameters (shape, loc0, loc1, scale0, scale1)
-    covariate : array-like
+    covariate : array-like, optional
         Covariate values in which to show the nonstationary return levels
-    dim : str, optional
-        Covariate core dimension name, default "time"
+    dim : str, default "time"
+        Covariate core dimension name
+    ax : matplotlib.Axes, default None
+        Axes on which to plot. By default, create a new figure
+    title : str, default None
+        Plot title
+    units : str, default None
+        Label for y-axis
+    cmap : str, default "rainbow"
+        Colormap to use for each nonstationary return curve
+    outfile : str, optional
+        File name to save the figure
+    legend : bool, default True
+        Show the legend
+    lgd_kwargs : dict, optional
+        Additional keyword arguments to pass to `ax.legend`
 
     Returns
     -------
     ax : matplotlib.Axes
     """
-    n = covariate.size
-    colors = colormaps["rainbow"](np.linspace(0, 1, n))
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(9, 5))
+    if title:
+        ax.set_title(title, loc="left")
 
     # Stationary return levels
-    return_levels = get_return_level(return_periods, theta_s)
-    ax.plot(
-        return_periods, return_levels, label="Stationary", c="k", ls="--", zorder=n + 1
-    )
-
-    # Nonstationary return levels
-    return_levels = get_return_level(return_periods, theta_ns, covariate)
-    for i, t in enumerate(covariate.values):
-        ax.plot(return_periods, return_levels.isel({dim: i}), label=t, c=colors[i])
+    if dparams_s is not None:
+        return_levels = get_return_level(return_periods, dparams_s)
+        ax.plot(
+            return_periods,
+            return_levels,
+            label="Stationary",
+            c="k",
+            ls="--",
+            zorder=len(covariate) + 1,
+        )
+    if dparams_ns is not None:
+        # Nonstationary return levels
+        n = covariate.size
+        colors = colormaps[cmap](np.linspace(0, 1, n))
+        return_levels = get_return_level(return_periods, dparams_ns, covariate)
+        for i, t in enumerate(covariate.values):
+            ax.plot(return_periods, return_levels.isel({dim: i}), label=t, c=colors[i])
 
     ax.set_xscale("log")
-    ax.set_xlabel("Return period [years]")
+    ax.set_ylabel(units)
+    ax.set_xlabel("Return period")
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.set_xmargin(1e-2)
-    ax.legend()
+
+    if legend:
+        ax.legend(**lgd_kwargs)
+
+    if outfile:
+        plt.tight_layout()
+        plt.savefig(outfile, dpi=200, bbox_inches="tight")
     return ax
 
 
-def plot_stacked_histogram(ax, dv1, dv2, bins, labels=None, dim="time"):
-    """Plot data binned by a covariate as a stacked histogram.
+def plot_stacked_histogram(
+    da1,
+    da2,
+    bins=None,
+    labels=None,
+    dim="time",
+    ax=None,
+    title=None,
+    units=None,
+    cmap="rainbow",
+    outfile=None,
+    legend=True,
+    **lgd_kwargs,
+):
+    """Histogram with data stacked by bins.
 
     Parameters
     ----------
-    ax : matplotlib.Axes
-    dv1 : xarray.DataArray
+    da1 : xarray.DataArray
         Data to plot in the histogram
-    dv2 : xarray.DataArray
+    da2 : xarray.DataArray
         Covariate used to bin the data
-    bins : array-like
-        Bin edges of dv2
-    labels : array-like, optional
-        Labels for each bin, default None (uses left side of each bin)
-    dim : str, default: "time"
-        Core dimension name of dv1 and dv2, default "time"
+    bins : str, int or array-like, default None
+        If an array, the bin edges of da2. Otherwise, the number of bins or method
+    labels : array-like, default None
+        Labels for each bin, default None uses left side of each bin
+    dim : str, default "time"
+        Core dimension name of da1 and da2
+    ax : matplotlib.Axes, default None
+        Axes on which to plot. By default, create a new figure
+    title : str, default None
+        Plot title
+    units : str, default None
+        Label for x-axis
+    cmap : str, default "rainbow"
+        Colormap to use for each bin
+    outfile : str, optional
+        File name to save the figure
+    legend : bool, default True
+        Show the legend
+    lgd_kwargs : dict, optional
+        Additional keyword arguments to pass to `ax.legend`
 
     Returns
     -------
     ax : matplotlib.Axes
+    bins : array-like
+        Bin edges used in the histogram
     """
+    # Check if da1 and da2 have the same size and dimension
+    assert da1.size == da2.size
+    if da1[dim] != da2[dim]:
+        da2.coords[dim] = da1[dim]
 
-    assert dv1.size == dv2.size
+    if bins is None or np.ndim(bins) == 0:
+        bins = np.histogram_bin_edges(da2, bins)
 
-    # Subset dv1 by bins
-    dx_subsets = [
-        dv1.where((dv2 >= bins[a]) & (dv2 < bins[a + 1])) for a in range(len(bins) - 1)
-    ]
+        # Round bins to integers if possible
+        if np.all(np.diff(bins) >= 1):
+            bins = np.ceil(bins).astype(dtype=int)
 
     if labels is None:
-        # Labels show left side of each bin
-        labels = bins[:-1]
+        labels = bins[:-1]  # Labels show left side of each bin
+        # labels = [f"{bins[i]}-{bins[i+1] - 1}" for i in range(len(bins) - 1)]
 
-    colors = colormaps["rainbow"](np.linspace(0, 1, len(bins) - 1))
+    # Divide data based on the covariate
+    da_subsets = [
+        da1.where(((da2 >= bins[a]) & (da2 < bins[a + 1])))
+        for a in range(len(bins) - 1)
+    ]
+    # Ensure the last bin includes the right edge
+    da_subsets[-1] = da1.where((da2 >= bins[-2]))
+
+    # Define colors for each bin
+    colors = colormaps[cmap](np.linspace(0, 1, len(bins) - 1))
+
+    if ax is None:
+        # Create a new figure
+        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+
+    ax.set_title(title, loc="left")
     ax.hist(
-        dx_subsets,
+        da_subsets,
         density=True,
         stacked=True,
         histtype="barstacked",
@@ -945,6 +1198,14 @@ def plot_stacked_histogram(ax, dv1, dv2, bins, labels=None, dim="time"):
         edgecolor="k",
         label=labels,
     )
-    ax.legend()
-    ax.set_ylabel("Probability")
-    return ax
+
+    ax.set_xlabel(units)
+    ax.set_ylabel("Density")
+
+    if legend:
+        ax.legend(lgd_kwargs)
+
+    if outfile:
+        plt.tight_layout()
+        plt.savefig(outfile, dpi=200, bbox_inches="tight")
+    return ax, bins

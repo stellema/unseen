@@ -21,18 +21,18 @@ def example_da_gev_1d():
     shape = np.random.uniform()
     loc = np.random.uniform(-10, 10)
     scale = np.random.uniform(0.1, 10)
-    theta = shape, loc, scale
+    dparams = shape, loc, scale
 
     rvs = genextreme.rvs(shape, loc=loc, scale=scale, size=(time.size), random_state=0)
     data = DataArray(rvs, coords=[time], dims=["time"])
-    return data, theta
+    return data, dparams
 
 
 def example_da_gev_1d_dask():
     """An example 1D GEV dask array and distribution parameters."""
-    data, theta = example_da_gev_1d()
+    data, dparams = example_da_gev_1d()
     data = data.chunk({"time": -1})
-    return data, theta
+    return data, dparams
 
 
 def example_da_gev_3d():
@@ -47,7 +47,7 @@ def example_da_gev_3d():
     shape = np.random.uniform(size=size)
     loc = np.random.uniform(-10, 10, size=size)
     scale = np.random.uniform(0.1, 10, size=size)
-    theta = np.stack([shape, loc, scale], axis=-1)
+    dparams = np.stack([shape, loc, scale], axis=-1)
 
     rvs = genextreme.rvs(
         shape,
@@ -57,14 +57,14 @@ def example_da_gev_3d():
         random_state=0,
     )
     data = DataArray(rvs, coords=[time, lat, lon], dims=["time", "lat", "lon"])
-    return data, theta
+    return data, dparams
 
 
 def example_da_gev_3d_dask():
     """An example 3D GEV dask array and its distribution parameters."""
-    data, theta = example_da_gev_3d()
+    data, dparams = example_da_gev_3d()
     data = data.chunk({"time": -1, "lat": 1, "lon": 1})
-    return data, theta
+    return data, dparams
 
 
 def add_example_gev_trend(data):
@@ -87,7 +87,7 @@ def example_da_gev_forecast():
     shape = np.random.uniform()
     loc = np.random.uniform(-10, 10)
     scale = np.random.uniform(0.1, 10)
-    theta = shape, loc, scale
+    dparams = shape, loc, scale
 
     rvs = genextreme.rvs(
         shape,
@@ -103,65 +103,65 @@ def example_da_gev_forecast():
     )
     data = data.assign_coords({"time": (["init_date", "lead_time"], time)})
     data_stacked = data.stack({"sample": ["ensemble", "init_date", "lead_time"]})
-    return data_stacked, theta
+    return data_stacked, dparams
 
 
 def test_fit_gev_1d():
     """Run stationary fit using 1D array & check results."""
-    data, theta_i = example_da_gev_1d()
-    theta = fit_gev(data, stationary=True)
+    data, dparams_i = example_da_gev_1d()
+    dparams = fit_gev(data, stationary=True)
     # Check fitted params match params used to create data
-    npt.assert_allclose(theta, theta_i, rtol=rtol)
+    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 def test_fit_gev_1d_user_estimates():
     """Run stationary fit using 1D array & user_estimates."""
-    data, theta_i = example_da_gev_1d()
-    user_estimates = list(theta_i)
-    theta = fit_gev(data, stationary=True, user_estimates=user_estimates)
+    data, dparams_i = example_da_gev_1d()
+    user_estimates = list(dparams_i)
+    dparams = fit_gev(data, stationary=True, user_estimates=user_estimates)
     # Check fitted params match params used to create data
-    npt.assert_allclose(theta, theta_i, rtol=rtol)
+    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 def test_fit_gev_1d_goodness():
     """Run stationary fit using 1D array & fit_goodness_test."""
-    data, theta_i = example_da_gev_1d()
-    theta = fit_gev(data, stationary=True, test_fit_goodness=True)
+    data, dparams_i = example_da_gev_1d()
+    dparams = fit_gev(data, stationary=True, test_fit_goodness=True)
     # Check fitted params match params used to create data
-    npt.assert_allclose(theta, theta_i, rtol=rtol)
+    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 def test_fit_gev_1d_numpy():
     """Run stationary fit using 1D np.ndarray & check results."""
-    data, theta_i = example_da_gev_1d()
+    data, dparams_i = example_da_gev_1d()
     data = data.values
-    theta = fit_gev(data, stationary=True)
+    dparams = fit_gev(data, stationary=True)
     # Check fitted params match params used to create data
-    npt.assert_allclose(theta, theta_i, rtol=rtol)
+    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 def test_fit_gev_1d_dask():
     """Run stationary fit using 1D dask array & check results."""
-    data, theta_i = example_da_gev_1d_dask()
-    theta = fit_gev(data, stationary=True, core_dim="time")
+    data, dparams_i = example_da_gev_1d_dask()
+    dparams = fit_gev(data, stationary=True, core_dim="time")
     # Check fitted params match params used to create data
-    npt.assert_allclose(theta, theta_i, rtol=rtol)
+    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 def test_fit_gev_3d():
     """Run stationary fit using 3D array & check results."""
-    data, theta_i = example_da_gev_3d()
-    theta = fit_gev(data, stationary=True, core_dim="time")
+    data, dparams_i = example_da_gev_3d()
+    dparams = fit_gev(data, stationary=True, core_dim="time")
     # Check fitted params match params used to create data
-    npt.assert_allclose(theta, theta_i, rtol=rtol)
+    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 def test_fit_gev_3d_dask():
     """Run stationary fit using 3D dask array & check results."""
-    data, theta_i = example_da_gev_3d_dask()
-    theta = fit_gev(data, stationary=True, core_dim="time")
+    data, dparams_i = example_da_gev_3d_dask()
+    dparams = fit_gev(data, stationary=True, core_dim="time")
     # Check fitted params match params used to create data
-    npt.assert_allclose(theta, theta_i, rtol=rtol)
+    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 def test_fit_ns_gev_1d():
@@ -170,13 +170,13 @@ def test_fit_ns_gev_1d():
     data = add_example_gev_trend(data)
     covariate = np.arange(data.time.size, dtype=int)
 
-    theta = fit_gev(
+    dparams = fit_gev(
         data,
         stationary=False,
         core_dim="time",
         covariate=covariate,
     )
-    assert np.all(theta[2] > 0)  # Positive trend in location
+    assert np.all(dparams[2] > 0)  # Positive trend in location
 
 
 def test_fit_ns_gev_1d_loc_only():
@@ -185,7 +185,7 @@ def test_fit_ns_gev_1d_loc_only():
     data = add_example_gev_trend(data)
     covariate = np.arange(data.time.size, dtype=int)
 
-    theta = fit_gev(
+    dparams = fit_gev(
         data,
         stationary=False,
         core_dim="time",
@@ -193,8 +193,8 @@ def test_fit_ns_gev_1d_loc_only():
         scale1=None,
         covariate=covariate,
     )
-    assert np.all(theta[2] > 0)  # Positive trend in location
-    assert np.all(theta[4] == 0)  # No trend in scale
+    assert np.all(dparams[2] > 0)  # Positive trend in location
+    assert np.all(dparams[4] == 0)  # No trend in scale
 
 
 def test_fit_ns_gev_1d_scale_only():
@@ -203,7 +203,7 @@ def test_fit_ns_gev_1d_scale_only():
     data = add_example_gev_trend(data)
     covariate = np.arange(data.time.size, dtype=int)
 
-    theta = fit_gev(
+    dparams = fit_gev(
         data,
         stationary=False,
         core_dim="time",
@@ -211,8 +211,8 @@ def test_fit_ns_gev_1d_scale_only():
         scale1=0,
         covariate=covariate,
     )
-    assert np.all(theta[2] == 0)  # No trend in location
-    assert np.all(theta[4] != 0)  # Nonzero trend in scale
+    assert np.all(dparams[2] == 0)  # No trend in location
+    assert np.all(dparams[4] != 0)  # Nonzero trend in scale
 
 
 def test_fit_ns_gev_1d_dask():
@@ -221,8 +221,8 @@ def test_fit_ns_gev_1d_dask():
     # Add a positive linear trend
     data = add_example_gev_trend(data)
     covariate = np.arange(data.time.size, dtype=int)
-    theta = fit_gev(data, stationary=False, covariate=covariate, core_dim="time")
-    assert np.all(theta[2] > 0)  # Positive trend in location
+    dparams = fit_gev(data, stationary=False, covariate=covariate, core_dim="time")
+    assert np.all(dparams[2] > 0)  # Positive trend in location
 
 
 def test_fit_ns_gev_3d():
@@ -231,8 +231,8 @@ def test_fit_ns_gev_3d():
     # Add a positive linear trend
     data = add_example_gev_trend(data)
     covariate = np.arange(data.time.size, dtype=int)
-    theta = fit_gev(data, stationary=False, covariate=covariate, core_dim="time")
-    assert np.all(theta.isel(theta=2) > 0)  # Positive trend in location
+    dparams = fit_gev(data, stationary=False, covariate=covariate, core_dim="time")
+    assert np.all(dparams.isel(dparams=2) > 0)  # Positive trend in location
 
 
 def test_fit_ns_gev_1d_relative_fit_test_bic_trend():
@@ -243,30 +243,38 @@ def test_fit_ns_gev_1d_relative_fit_test_bic_trend():
     data = add_example_gev_trend(data)
     covariate = np.arange(data.time.size, dtype=int)
 
-    theta = fit_gev(
+    dparams = fit_gev(
         data,
         stationary=False,
         core_dim="time",
         covariate=covariate,
         relative_fit_test="bic",
     )
-    assert np.all(theta[2] > 0)  # Positive trend in location
+    assert np.all(dparams[2] > 0)  # Positive trend in location
 
 
 def test_fit_ns_gev_1d_relative_fit_test_bic_no_trend():
     """Run non-stationary fit & check 'BIC' test returns stationary params."""
     data, _ = example_da_gev_1d()
     covariate = np.arange(data.time.size, dtype=int)
+    dparams_stationary = fit_gev(
+        data,
+        stationary=True,
+        core_dim="time",
+    )
 
-    theta = fit_gev(
+    dparams = fit_gev(
         data,
         stationary=False,
         core_dim="time",
         covariate=covariate,
         relative_fit_test="bic",
     )
-    assert np.all(theta[2] == 0)  # No trend in location
-    assert np.all(theta[4] == 0)  # No trend in scale
+    assert np.all(dparams[0] == dparams_stationary[0])
+    assert np.all(dparams[1] == dparams_stationary[1])
+    assert np.all(dparams[3] == dparams_stationary[2])
+    assert np.all(dparams[2] == 0)  # No trend in location
+    assert np.all(dparams[4] == 0)  # No trend in scale
 
 
 def test_fit_ns_gev_3d_dask():
@@ -275,8 +283,8 @@ def test_fit_ns_gev_3d_dask():
     # Add a positive linear trend
     data = add_example_gev_trend(data)
     covariate = np.arange(data.time.size, dtype=int)
-    theta = fit_gev(data, stationary=False, covariate=covariate, core_dim="time")
-    assert np.all(theta.isel(theta=2) > 0)  # Positive trend in location
+    dparams = fit_gev(data, stationary=False, covariate=covariate, core_dim="time")
+    assert np.all(dparams.isel(dparams=2) > 0)  # Positive trend in location
 
 
 def test_fit_ns_gev_forecast():
@@ -289,8 +297,8 @@ def test_fit_ns_gev_forecast():
     data = data + trend
     data = data.sortby(data.time)
     covariate = covariate.sortby(data.time)
-    theta = fit_gev(data, stationary=False, covariate=covariate, core_dim="sample")
-    assert np.all(theta[2] > 0)  # Positive trend in location
+    dparams = fit_gev(data, stationary=False, covariate=covariate, core_dim="sample")
+    assert np.all(dparams[2] > 0)  # Positive trend in location
 
 
 def test_get_return_period():
@@ -304,20 +312,20 @@ def test_get_return_period():
 
 def test_get_return_period_1d():
     """Run get_return_period for 1d array of events using 1d data."""
-    data, theta = example_da_gev_1d()
+    data, dparams = example_da_gev_1d()
     event = data.quantile([0.25, 0.5, 0.75], dim="time")
-    rp = get_return_period(event, theta)
+    rp = get_return_period(event, dparams)
     assert rp.shape == event.shape
     assert np.all(np.isfinite(rp))
 
 
 def test_get_return_period_3d():
     """Run get_return_period for 3d array of events using 3d data."""
-    data, theta = example_da_gev_3d()
-    theta = fit_gev(data, stationary=True)
+    data, dparams = example_da_gev_3d()
+    dparams = fit_gev(data, stationary=True)
     # Multiple events unique to each lat/lon
     event = data.quantile([0.25, 0.5, 0.75], dim="time")
-    rp = get_return_period(event, theta)
+    rp = get_return_period(event, dparams)
     assert rp.shape == event.shape
     assert np.all(np.isfinite(rp))
 
@@ -339,30 +347,30 @@ def test_get_return_period_3d_nonstationary():
 
 def test_get_return_level():
     """Run get_return_level for a single return_period using 1d data."""
-    _, theta = example_da_gev_1d()
+    _, dparams = example_da_gev_1d()
     rp = 100
-    return_level = get_return_level(rp, theta)
+    return_level = get_return_level(rp, dparams)
     assert return_level.size == 1
     assert np.all(np.isfinite(return_level))
 
 
 def test_get_return_level_1d():
     """Run get_return_level for 1d array of periods using 1d data."""
-    _, theta = example_da_gev_1d()
+    _, dparams = example_da_gev_1d()
     rp = np.array([10, 100, 1000])
-    return_level = get_return_level(rp, theta)
+    return_level = get_return_level(rp, dparams)
     assert return_level.shape == rp.shape
     assert np.all(np.isfinite(return_level))
 
 
 def test_get_return_level_3d():
     """Run get_return_level for 3d array of periods using 3d data."""
-    data, theta = example_da_gev_3d()
-    theta = fit_gev(data, stationary=True)
+    data, dparams = example_da_gev_3d()
+    dparams = fit_gev(data, stationary=True)
     # Multiple events unique to each lat/lon
     dims = ("return_period", "lat", "lon")
     rp = np.array([10, 100, 1000] * 4).T
     rp = DataArray(rp.reshape((3, 2, 2)), dims=dims)
-    return_level = get_return_level(rp, theta)
+    return_level = get_return_level(rp, dparams)
     assert return_level.shape == rp.shape
     assert np.all(np.isfinite(return_level))
