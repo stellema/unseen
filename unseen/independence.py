@@ -109,10 +109,14 @@ def create_plot(
         color = next(colors)
         mean_corr = mean_correlations[month].dropna(lead_dim)
         month_abbr = calendar.month_abbr[month]
-        mean_corr.plot(
-            color=color, marker="o", linestyle="None", label=f"{month_abbr} starts"
+        mean_corr.plot.scatter(
+            x=lead_dim,
+            color=color,
+            marker="o",
+            linestyle="None",
+            label=f"{month_abbr} starts",
         )
-        lower_bound, upper_bound = null_correlation_bounds[month]
+        lower_bound, upper_bound = null_correlation_bounds[month].values
         lead_time_bounds = [mean_corr[lead_dim].min(), mean_corr[lead_dim].max()]
         plt.plot(
             lead_time_bounds, [lower_bound, lower_bound], color=color, linestyle="--"
@@ -310,10 +314,8 @@ def _get_null_correlation_bounds(
     null_correlations = xr.concat(null_correlations, "k")
     null_correlations = null_correlations.chunk({"k": -1})
 
-    lower_bound = float(null_correlations.quantile(0.025).values)
-    upper_bound = float(null_correlations.quantile(0.975).values)
-
-    return lower_bound, upper_bound
+    bounds = null_correlations.quantile([0.025, 0.975], dim="k")
+    return bounds
 
 
 def _parse_command_line():
@@ -384,7 +386,41 @@ def _main():
         ensemble_dim=args.ensemble_dim,
     )
 
-    create_plot(mean_correlations, null_correlation_bounds, args.outfile)
+    # # Create plot if the data dimensions are correct (i.e, no extra dimensions)
+    if all(
+        [
+            dim in [args.ensemble_dim, args.init_dim, args.lead_dim]
+            for dim in da_fcst.dims
+        ]
+    ):
+        create_plot(mean_correlations, null_correlation_bounds, args.outfile)
+
+    # Save mean_correlations and null_correlation_bounds to a file
+    else:
+        # Create Dataset
+        ds_independence = xr.Dataset(
+            {
+                "mean_correlations": xr.concat(
+                    [
+                        da.assign_coords({"month": k})
+                        for k, da in mean_correlations.items()
+                    ],
+                    dim="month",
+                ),
+                "null_correlation_bounds": xr.concat(
+                    [
+                        da.assign_coords({"month": k})
+                        for k, da in null_correlation_bounds.items()
+                    ],
+                    dim="month",
+                ),
+            }
+        )
+        # todo: copy attributes from da_fcst
+        # Add history attribute
+        infile_logs = {args.fcst_file: ds_fcst.attrs["history"]}
+        ds_independence.attrs["history"] = fileio.get_new_log(infile_logs=infile_logs)
+        ds_independence.to_netcdf(args.outfile.replace(".png", ".nc"))
 
 
 if __name__ == "__main__":
