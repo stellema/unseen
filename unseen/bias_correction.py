@@ -269,6 +269,7 @@ def _main():
     da_fcst_bc = remove_bias(da_fcst, bias, args.method)
 
     ds_fcst_bc = da_fcst_bc.to_dataset(name=args.var)
+    ds_fcst_bc.attrs.update(ds_fcst.attrs)
 
     infile_logs = {
         args.fcst_file: ds_fcst.attrs["history"],
