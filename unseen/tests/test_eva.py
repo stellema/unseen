@@ -114,15 +114,6 @@ def test_fit_gev_1d():
     npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
-# def test_fit_gev_1d_user_estimates():
-#     """Run stationary fit using 1D array & user_estimates."""
-#     data, dparams_i = example_da_gev_1d()
-#     user_estimates = list(dparams_i)
-#     dparams = fit_gev(data, stationary=True, user_estimates=user_estimates)
-#     # Check fitted params match params used to create data
-#     npt.assert_allclose(dparams, dparams_i, rtol=rtol)
-
-
 def test_fit_gev_1d_goodness():
     """Run stationary fit using 1D array & fit_goodness_test."""
     data, dparams_i = example_da_gev_1d()
@@ -131,13 +122,13 @@ def test_fit_gev_1d_goodness():
     npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
-# def test_fit_gev_1d_numpy():
-#     """Run stationary fit using 1D np.ndarray & check results."""
-#     data, dparams_i = example_da_gev_1d()
-#     data = data.values
-#     dparams = fit_gev(data, stationary=True)
-#     # Check fitted params match params used to create data
-#     npt.assert_allclose(dparams, dparams_i, rtol=rtol)
+def test_fit_gev_1d_numpy():
+    """Run stationary fit using 1D np.ndarray & check results."""
+    data, dparams_i = example_da_gev_1d()
+    data = data.values
+    dparams = fit_gev(data, stationary=True)
+    # Check fitted params match params used to create data
+    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 def test_fit_gev_1d_dask():

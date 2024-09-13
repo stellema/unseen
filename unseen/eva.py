@@ -175,7 +175,7 @@ def _fitstart_1d(data, method):
         # User provided initial estimates
         dparams_i = method
 
-    if method == "LMM":
+    elif method == "LMM":
         # L-moment estimates
         scale = np.sqrt(6 * np.var(data)) / np.pi
         location = data.mean() - 0.57722 * scale
@@ -259,8 +259,8 @@ def fit_gev(
         A nonstationary covariate array or coordinate name
     loc1, scale1 : float or None, default 0
         Initial guess of trend parameters. If None, the trend is fixed at zero.
-    fit_start : {array-like, 'scipy', 'scipy_fitstart', 'scipy_subset', 'xclim_APP',
-    'xclim_MLE', 'MM', 'QM'}, default 'xclim_MLE'
+    fit_start : {array-like, 'LMM', 'MM', 'scipy', 'scipy_fitstart', 'scipy_subset',
+    'xclim_MLE'}, default 'LMM'
         Initial guess method/estimate of the shape, loc and scale parameters.
     test_fit_goodness : bool, default False
         Test goodness of fit and attempt retry
@@ -279,7 +279,7 @@ def fit_gev(
 
     Returns
     -------
-    dparams : xr.DataArray
+    dparams : xarray.DataArray
         The GEV distribution parameters with the same dimensions as `data`
         (excluding `core_dim`) and a new dimension `dparams`:
         If stationary, dparams = (shape, loc, scale).
@@ -363,7 +363,10 @@ def fit_gev(
             if isinstance(relative_fit_test, str):
                 # Test relative fit of stationary and nonstationary models
                 # Negative log likelihood using genextreme parameters
-                shape, loc, scale = fit_stationary_gev(data, dparams_i)
+                kws = kwargs.copy()
+                kws["stationary"] = True
+                kws["fit_start"] = dparams_i
+                shape, loc, scale = fit_gev(data, **kws)
                 L1 = nllf([-shape, loc, scale], data)
                 L2 = res.fun
 
@@ -383,11 +386,11 @@ def fit_gev(
             pvalue = check_gev_fit(data, dparams, core_dim=core_dim)
 
             # Accept null distribution of the Anderson-darling test (same distribution)
-            # todo: change tests
+            # todo: add more tests?
             if np.all(pvalue < alpha):
-                if fit_start != "LMM":
-                    warnings.warn("GEV fit failed. Retrying without user_estimates.")
-                    kwargs["fit_start"] = "LMM"
+                if fit_start != "xclim_MLE":
+                    warnings.warn("GEV fit failed. Retrying with fit_start=xclim_MLE.")
+                    kwargs["fit_start"] = "xclim_MLE"
                     dparams = _fit_1d(data, covariate, **kwargs)
                 else:
                     # Return NaNs
@@ -426,32 +429,34 @@ def fit_gev(
         output_dtypes=["float64"],
         dask_gufunc_kwargs=dict(output_sizes={"dparams": n}),
     )
+    if isinstance(data, DataArray):
+        # Format output (consistent with xclim)
+        if stationary:
+            dparam_names = ["c", "loc", "scale"]
+        else:
+            dparam_names = ["c", "loc0", "loc1", "scale0", "scale1"]
+        dparams.coords["dparams"] = dparam_names
 
-    # Format output (consistent with xclim)
-    if stationary:
-        dparam_names = ["c", "loc", "scale"]
-    else:
-        dparam_names = ["c", "loc0", "loc1", "scale0", "scale1"]
-    dparams.coords["dparams"] = dparam_names
-
-    # Add coordinates for the distribution parameters and transpose to original shape (with dim -> dparams)
-    dparams.attrs = data.attrs.copy()
-    dist_name = "genextreme" if stationary else "genextreme nonstationary"
-    estimator = fit_start.upper() if isinstance(fit_start, str) else "User estimates"
-    attrs = dict(
-        long_name=f"{dist_name.capitalize()} parameters",
-        description=f"Parameters of the {dist_name} distribution",
-        method="MLE",
-        estimator=estimator,
-        scipy_dist="genextreme",
-        units="",
-        history=xclim.core.formatting.update_history(
-            f"Estimate distribution parameters by MLE method along dimension {core_dim}.",
-            new_name="fit",
-            data=data,
-        ),
-    )
-    dparams.attrs.update(attrs)
+        # Add coordinates for the distribution parameters and transpose to original shape (with dim -> dparams)
+        dparams.attrs = data.attrs.copy()
+        dist_name = "genextreme" if stationary else "genextreme nonstationary"
+        estimator = (
+            fit_start.upper() if isinstance(fit_start, str) else "User estimates"
+        )
+        attrs = dict(
+            long_name=f"{dist_name.capitalize()} parameters",
+            description=f"Parameters of the {dist_name} distribution",
+            method="MLE",
+            estimator=estimator,
+            scipy_dist="genextreme",
+            units="",
+            history=xclim.core.formatting.update_history(
+                f"Estimate distribution parameters by MLE method along dimension {core_dim}.",
+                new_name="fit",
+                data=data,
+            ),
+        )
+        dparams.attrs.update(attrs)
 
     return dparams
 
@@ -671,7 +676,7 @@ def gev_return_curve(
 
     Parameters
     ----------
-    data : xarray DataArray
+    data : xarray.DataArray
     event_value : float
         Magnitude of event of interest
     bootstrap_method : {'parametric', 'non-parametric'}, default "non-parametric"
@@ -767,7 +772,7 @@ def plot_gev_return_curve(
     Parameters
     ----------
     ax : matplotlib plot axis
-    data : xarray DataArray
+    data : xarray.DataArray
     event_value : float
         Magnitude of the event of interest
     direction : {'exceedance', 'deceedance'}, default 'exceedance'
