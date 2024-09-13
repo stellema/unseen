@@ -10,7 +10,8 @@ from scipy.stats import genextreme, goodness_of_fit, skew
 from scipy.stats.distributions import chi2
 import warnings
 from xarray import apply_ufunc, DataArray
-import xclim
+from xclim.core.indices import stats
+from xclim.core.formatting import update_history
 
 
 def event_in_context(data, threshold, direction):
@@ -201,7 +202,7 @@ def _fitstart_1d(data, method):
     elif method == "xclim_MLE":
         da = DataArray(data, dims="time")
         method_name = method.replace("xclim_", "").upper()
-        dparams_i = xclim.indices.stats.fit(da, "genextreme", method=method_name)
+        dparams_i = stats.fit(da, "genextreme", method=method_name)
         dparams_i[0] = -dparams_i[0]
 
     return dparams_i
@@ -237,7 +238,7 @@ def fit_gev(
     core_dim="time",
     stationary=True,
     covariate=None,
-    fit_start="xclim_MLE",
+    fit_start="LMM",
     loc1=0,
     scale1=0,
     test_fit_goodness=False,
@@ -450,7 +451,7 @@ def fit_gev(
             estimator=estimator,
             scipy_dist="genextreme",
             units="",
-            history=xclim.core.formatting.update_history(
+            history=update_history(
                 f"Estimate distribution parameters by MLE method along dimension {core_dim}.",
                 new_name="fit",
                 data=data,
