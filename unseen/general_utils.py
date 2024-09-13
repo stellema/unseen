@@ -5,8 +5,8 @@ from matplotlib.ticker import AutoMinorLocator
 import matplotlib.pyplot as plt
 import numpy as np
 from xarray import Dataset
-import xclim
-import xesmf as xe
+from xclim.core import units
+from xesmf import Regridder
 
 
 class store_dict(argparse.Action):
@@ -63,7 +63,7 @@ def convert_units(da, target_units):
         da.attrs["units"] = xclim_unit_check[da.units]
 
     try:
-        da = xclim.units.convert_units_to(da, target_units)
+        da = units.convert_units_to(da, target_units)
     except Exception as e:
         in_precip_kg = da.attrs["units"] == "kg m-2 s-1"
         out_precip_mm = target_units in ["mm d-1", "mm day-1"]
@@ -106,7 +106,7 @@ def regrid(ds, ds_grid, method="conservative", **kwargs):
         var_attrs = {var: ds[var].attrs for var in ds.data_vars}
 
     # Regrid data
-    regridder = xe.Regridder(ds, ds_grid, method, **kwargs)
+    regridder = Regridder(ds, ds_grid, method, **kwargs)
     ds_regrid = regridder(ds)
 
     # Update regridded data attributes
