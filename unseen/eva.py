@@ -388,9 +388,9 @@ def fit_gev(
             # Accept null distribution of the Anderson-darling test (same distribution)
             # todo: add more tests?
             if np.all(pvalue < alpha):
-                if fit_start != "xclim_MLE":
-                    warnings.warn("GEV fit failed. Retrying with fit_start=xclim_MLE.")
-                    kwargs["fit_start"] = "xclim_MLE"
+                if fit_start != "scipy":
+                    warnings.warn("GEV fit failed. Retrying with fit_start='scipy'.")
+                    kwargs["fit_start"] = "scipy"
                     dparams = _fit_1d(data, covariate, **kwargs)
                 else:
                     # Return NaNs
