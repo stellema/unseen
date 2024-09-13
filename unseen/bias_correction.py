@@ -2,7 +2,6 @@
 
 import argparse
 import operator
-
 import xarray as xr
 
 from . import array_handling
@@ -30,9 +29,9 @@ def get_bias(
 
     Parameters
     ----------
-    fcst : xarray DataArray
+    fcst : xarray.DataArray
         Forecast array with ensemble, initial date and lead time dimensions
-    obs : xarray DataArray
+    obs : xarray.DataArray
         Observational array with time dimension
     method : {'additive', 'multiplicative'}
         Bias removal method
@@ -60,7 +59,7 @@ def get_bias(
 
     Returns
     -------
-    bias : xarray DataArray
+    bias : xarray.DataArray
 
     Raises
     ------
@@ -134,9 +133,9 @@ def remove_bias(fcst, bias, method, init_dim="init_date"):
 
     Parameters
     ----------
-    fcst : xarray DataArray
+    fcst : xarray.DataArray
         Forecast array with initial date and lead time dimensions
-    bias : xarray DataArray
+    bias : xarray.DataArray
         Bias array
     method : {'additive', 'multiplicative'}
         Bias removal method
@@ -145,7 +144,7 @@ def remove_bias(fcst, bias, method, init_dim="init_date"):
 
     Returns
     -------
-    fcst_bc : xarray DataArray
+    fcst_bc : xarray.DataArray
         Bias corrected forecast array
 
     Raises
