@@ -512,7 +512,7 @@ def _fix_metadata(ds, metadata_file):
     with open(metadata_file, "r") as reader:
         metadata_dict = yaml.load(reader, Loader=yaml.BaseLoader)
 
-    valid_keys = ["rename", "drop_coords", "round_coords", "units"]
+    valid_keys = ["rename", "drop_coords", "round_coords", "units", "custom_code"]
     for key in metadata_dict.keys():
         if key not in valid_keys:
             raise KeyError(f"Invalid metadata key: {key}")
@@ -537,6 +537,14 @@ def _fix_metadata(ds, metadata_file):
         for var, units in metadata_dict["units"].items():
             if var in ds.data_vars:
                 ds[var].attrs["units"] = units
+
+    if "custom_code" in metadata_dict:
+        try:
+            for code_str in metadata_dict["custom_code"]:
+                ds = eval(code_str)
+        except Exception as e:
+            warnings.warn(f"Custom code failed: {e} (must return ds)")
+            raise e
 
     return ds
 
@@ -998,6 +1006,7 @@ def _main():
 
     if args.output_chunks:
         ds = ds.chunk(args.output_chunks)
+
     if args.time_agg_dates:
         ds = ds.set_coords(("event_time"))
     ds = ds[kwargs["variables"]]

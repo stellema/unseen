@@ -237,6 +237,7 @@ def plot_timeseries_scatter(
     obs_label=None,
     units=None,
     time_dim="time",
+    add_legend=True,
     outfile=None,
 ):
     """Timeseries scatter plot of ensemble and observed data.
@@ -284,20 +285,21 @@ def plot_timeseries_scatter(
         ax.scatter(
             da_obs[time_dim],
             da_obs,
-            s=20,
+            s=28,
             c="k",
             marker="x",
             label=obs_label,
             zorder=10,
         )
     # Plot ensemble data
-    ax.scatter(da[time_dim], da, s=5, c="deepskyblue", label=label)
+    ax.scatter(da[time_dim], da, s=8, c="deepskyblue", label=label)
 
     ax.set_ylabel(units)
     ax.set_xmargin(1e-2)
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.legend()
+    if add_legend:
+        ax.legend()
 
     if outfile:
         plt.tight_layout()

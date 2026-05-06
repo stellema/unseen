@@ -442,6 +442,8 @@ def _get_null_correlation_bounds(
 
     n_init_dates = len(da[init_dim])
     n_ensembles = len(da[ensemble_dim])
+    # # Fixes "tuple indices must be integers or slices, not tuple" error
+    # da = da.compute()
     da_stacked = da.stack(sample=(init_dim, lead_dim, ensemble_dim))
 
     null_correlations = []
@@ -526,6 +528,14 @@ def _parse_command_line():
         default={},
         help="Chunks for writing data to file (e.g. init_date=-1 lead_time=-1)",
     )
+    parser.add_argument(
+        "--file_kwargs",
+        type=str,
+        nargs="*",
+        default={},
+        action=general_utils.store_dict,
+        help="Keyword arguments for opening the data file (excluding sel and variables)",
+    )
     args = parser.parse_args()
 
     return args
@@ -541,8 +551,12 @@ def _main():
         print(client)
 
     ds_fcst = fileio.open_dataset(
-        args.fcst_file, variables=[args.var], sel=args.spatial_selection
+        args.fcst_file,
+        variables=[args.var],
+        sel=args.spatial_selection,
+        **args.file_kwargs,
     )
+
     da_fcst = ds_fcst[args.var]
 
     ds = run_tests(
