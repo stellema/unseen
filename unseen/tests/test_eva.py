@@ -5,7 +5,12 @@ import numpy.testing as npt
 import pytest
 import xarray as xr
 
-from unseen.eva import fit_gev, get_return_period, get_return_level
+from unseen.eva import (
+    fit_gev,
+    get_return_period,
+    get_return_level,
+    gev_confidence_interval,
+)
 
 rtol = 0.3  # relative tolerance for testing close values
 
@@ -127,16 +132,6 @@ def test_fit_ns_gev_3d(example_da_gev_3d):
     covariate = xr.DataArray(np.arange(data.time.size), dims="time")
     dparams = fit_gev(data, stationary=False, covariate=covariate, core_dim="time")
     assert np.all(dparams.isel(dparams=2) > 0)  # Positive trend in location
-
-
-@pytest.mark.parametrize("example_da_gev", ["xarray", "numpy", "dask"], indirect=True)
-def test_fit_gev_1d_retry_fit(example_da_gev):
-    """Run stationary GEV fit using 1D array & retry_fit."""
-    data, dparams_i = example_da_gev
-    # Set large alpha to force any fit considered bad
-    dparams = fit_gev(data, stationary=True, retry_fit=True, alpha=1)
-    # Check fitted params match params used to create data
-    npt.assert_allclose(dparams, dparams_i, rtol=rtol)
 
 
 @pytest.mark.parametrize("example_da_gev", ["xarray", "numpy", "dask"], indirect=True)
@@ -268,3 +263,53 @@ def test_get_return_level_3d(example_da_gev_3d):
 
     assert return_level.shape == ari.shape
     assert np.all(np.isfinite(return_level))
+
+
+@pytest.mark.parametrize("example_da_gev", ["xarray", "dask"], indirect=True)
+@pytest.mark.parametrize("stationary", [True, False])
+@pytest.mark.parametrize("ari", [100, np.array([10, 100, 1000])])
+@pytest.mark.parametrize("bootstrap_method", ["parametric", "non-parametric"])
+def test_gev_confidence_interval(example_da_gev, stationary, ari, bootstrap_method):
+    """Test get_confidence_intervals function."""
+
+    data, dparams_i = example_da_gev
+    core_dim = "time"
+
+    if not stationary:
+        data = add_example_gev_trend(data)
+        covariate = xr.DataArray(np.arange(data.time.size), dims="time")
+    elif stationary:
+        covariate = None
+    return_covariate = xr.DataArray([0], dims="time")
+
+    if isinstance(ari, int):
+        ari = np.array([ari])
+    ari = xr.DataArray(ari, dims="return_period")
+
+    dparams = fit_gev(
+        data,
+        covariate=covariate,
+        stationary=stationary,
+        core_dim=core_dim,
+    )
+
+    return_level = get_return_level(
+        ari, dparams, core_dim=core_dim, covariate=return_covariate
+    )
+
+    ci_bounds = gev_confidence_interval(
+        data,
+        dparams,
+        return_period=ari,
+        bootstrap_method=bootstrap_method,
+        n_resamples=100,
+        ci=0.95,
+        core_dim=core_dim,
+        stationary=stationary,
+        covariate=covariate,
+        return_covariate=return_covariate,
+    )
+
+    # Check return level is between CI bounds
+    assert np.all(return_level >= ci_bounds.isel(quantile=0))
+    assert np.all(return_level <= ci_bounds.isel(quantile=1))

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Extreme value analysis functions."""
 
 import argparse
@@ -995,15 +994,16 @@ def gev_confidence_interval(
     n_resamples=1000,
     ci=0.95,
     core_dim="time",
-    covariate=0,
+    stationary=True,
+    covariate=None,
+    return_covariate=None,
     fit_kwargs={},
+    rng=None,
 ):
-    """
-    Bootstrapped confidence intervals for return periods or return levels.
+    """Bootstrapped confidence intervals for return periods or return levels.
 
     Parameters:
     -----------
-
     data : xarray.DataArray
         Input data to fit GEV distribution
     dparams : xarray.DataArray, optional
@@ -1019,9 +1019,16 @@ def gev_confidence_interval(
     ci : float, optional
         Confidence level (e.g., 0.95 for 95% confidence interval, default: 0.95)
     core_dim : str, optional
-        The core dimension along which to apply GEV fitting (default: None, will auto-detect)
+        The core dimension along which to fit GEV.
+    stationary : bool, optional
+    covariate : xarray.DataArray, optional
+        Covariate for nonstationary GEV fit.
+    return_coviariate : xarray.DataArray, optional
+        Covariate values in which to evaluate return levels or return periods.
     fit_kwargs : dict, optional
         Additional keyword arguments to pass to `fit_gev`
+    rng : numpy.random.Generator, optional
+        Random number generator for reproducibility. If None, a default RNG is used.
 
     Returns:
     --------
@@ -1029,29 +1036,57 @@ def gev_confidence_interval(
         Confidence intervals with lower and upper bounds along dim 'quantile'
     """
 
-    # Replace core dim with the one from the fit_kwargs if it exists
+    # Ensure no duplicate kwargs in fit_kwargs
     core_dim = fit_kwargs.pop("core_dim", core_dim)
+    stationary = fit_kwargs.pop("stationary", stationary)
     covariate = fit_kwargs.pop("covariate", covariate)
 
-    rng = np.random.default_rng(seed=0)
+    if rng is None:
+        rng = np.random.default_rng(seed=0)
+
+    if (return_period is not None) and (return_level is not None):
+        raise ValueError("Only one of return_period or return_level can be provided.")
+
+    if not stationary:
+        if covariate is None:
+            raise ValueError("Covariate must be provided for a nonstationary fit.")
+        if return_covariate is None:
+            return_covariate = covariate
+            warnings.warn(
+                "return_coviariate not provided. Evaluating CI at all covariates."
+            )
+        assert hasattr(covariate, core_dim)
+        assert hasattr(return_covariate, core_dim)
+
     if dparams is None:
-        dparams = fit_gev(data, covariate, core_dim=core_dim, **fit_kwargs)
-    shape, loc, scale = unpack_gev_params(dparams, covariate)
+        dparams = fit_gev(
+            data, covariate, stationary=stationary, core_dim=core_dim, **fit_kwargs
+        )
 
     if bootstrap_method == "parametric":
         # Generate bootstrapped data using the GEV distribution
+        shape, loc, scale = unpack_gev_params(dparams, covariate)
+        if stationary:
+            input_core_dims = [[], [], []]
+        else:
+            input_core_dims = [[], [core_dim], [core_dim]]
         boot_data = apply_ufunc(
             genextreme.rvs,
             shape,
             loc,
             scale,
-            input_core_dims=[[], [], []],
+            input_core_dims=input_core_dims,
             output_core_dims=[["k", core_dim]],
-            kwargs=dict(size=(n_resamples, data[core_dim].size)),
+            kwargs=dict(size=(n_resamples, data[core_dim].size), random_state=rng),
             vectorize=True,
             dask="parallelized",
+            output_dtypes=["float64"],
+            dask_gufunc_kwargs={
+                "output_sizes": {"k": n_resamples, core_dim: data[core_dim].size}
+            },
         )
         boot_data = boot_data.transpose("k", core_dim, ...)
+        boot_covariate = covariate
 
     elif bootstrap_method == "non-parametric":
         # Resample data with replacements
@@ -1063,18 +1098,36 @@ def gev_confidence_interval(
         )
         indexer = DataArray(resample_indices, dims=("k", core_dim))
         boot_data = data.isel({core_dim: indexer})
+        if not stationary:
+            boot_covariate = covariate.isel({core_dim: indexer})
+        else:
+            boot_covariate = covariate
 
     # Fit GEV parameters to resampled data
-    gev_params_resampled = fit_gev(boot_data, core_dim=core_dim, **fit_kwargs)
+    gev_params_resampled = fit_gev(
+        boot_data,
+        core_dim=core_dim,
+        stationary=stationary,
+        covariate=boot_covariate,
+        **fit_kwargs,
+    )
 
     if return_period is not None:
         result = get_return_level(
-            return_period, gev_params_resampled, core_dim=core_dim, covariate=covariate
+            return_period,
+            gev_params_resampled,
+            core_dim=core_dim,
+            covariate=return_covariate,
         )
     elif return_level is not None:
         result = get_return_period(
-            return_level, gev_params_resampled, core_dim=core_dim, covariate=covariate
+            return_level,
+            gev_params_resampled,
+            core_dim=core_dim,
+            covariate=return_covariate,
         )
+    else:
+        return gev_params_resampled
 
     # Bounds of confidence intervals
     ci = ci * 100  # Avoid rounding errors
@@ -1117,6 +1170,7 @@ def gev_return_curve(
     fit_kwargs : dict, optional
         Additional keyword arguments to pass to `fit_gev`
     """
+
     rng = np.random.default_rng(seed=0)
 
     # GEV fit to data
@@ -1167,7 +1221,7 @@ def gev_return_curve(
         np.isfinite(boot_event_return_periods)
     ]
     event_return_period_lower_ci = np.quantile(boot_event_return_periods, q)
-    event_return_period_upper_ci = np.quantile(boot_event_return_periods, q - 1)
+    event_return_period_upper_ci = np.quantile(boot_event_return_periods, 1 - q)
     event_data = (
         event_return_period,
         event_return_period_lower_ci,
@@ -1245,16 +1299,16 @@ def plot_gev_return_curve(
     ax.plot(
         curve_return_periods,
         curve_values,
-        color="tab:blue",
+        color="#0000FF",
         label="GEV fit to data",
     )
     ax.fill_between(
         curve_return_periods,
         curve_values_lower_ci,
         curve_values_upper_ci,
-        color="tab:blue",
+        color="#0000FF",
         alpha=0.2,
-        label="95% CI on GEV fit",
+        label="Uncertainty of GEV fit",
     )
     ax.plot(
         [event_return_period_lower_ci, event_return_period_upper_ci],
@@ -1262,16 +1316,16 @@ def plot_gev_return_curve(
         color="0.5",
         marker="|",
         linestyle=":",
-        label="95% CI for record event",
+        label="Uncertainty of record event",
     )
     empirical_return_values = np.sort(data, axis=None)[::-1]
     empirical_return_periods = len(data) / np.arange(1.0, len(data) + 1.0)
     ax.scatter(
         empirical_return_periods,
         empirical_return_values,
-        color="tab:blue",
+        color="#0000FF",
         alpha=0.5,
-        label="empirical data",
+        label="Data",
     )
     rp = f"{event_return_period:.0f}"
     rp_lower = f"{event_return_period_lower_ci:.0f}"
@@ -1293,14 +1347,14 @@ def plot_gev_return_curve(
     handles, labels = ax.get_legend_handles_labels()
     handles = [handles[3], handles[0], handles[1], handles[2]]
     labels = [labels[3], labels[0], labels[1], labels[2]]
-    ax.legend(handles, labels, loc="upper left")
+    ax.legend(handles, labels)
     ax.set_xscale("log")
     ax.set_xlabel("return period (years)")
     if ylabel:
         ax.set_ylabel(ylabel)
     if ylim:
         ax.set_ylim(ylim)
-    ax.grid()
+    ax.grid("both", which="major", linestyle="--", linewidth=0.5)
 
 
 def plot_nonstationary_pdfs(
@@ -1311,7 +1365,7 @@ def plot_nonstationary_pdfs(
     ax=None,
     title="",
     units=None,
-    cmap="rainbow",
+    cmap="plasma",
     outfile=None,
 ):
     """Plot stationary and nonstationary GEV PDFs.
@@ -1339,14 +1393,16 @@ def plot_nonstationary_pdfs(
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(10, 7))
 
-    ax.set_title(title, loc="left")
+    ax.set_title(title)
 
     n = covariate.size
-    colors = colormaps[cmap](np.linspace(0, 1, n))
+    colors = colormaps[cmap](np.linspace(0, 0.8, n))
     shape, loc, scale = unpack_gev_params(dparams_ns, covariate)
 
     # Histogram.
-    _, bins, _ = ax.hist(data, bins=40, density=True, alpha=0.5, label="Histogram")
+    _, bins, _ = ax.hist(
+        data, bins="auto", density=True, alpha=0.2, label="Histogram", color="k"
+    )
 
     # Stationary GEV PDF
     shape_s, loc_s, scale_s = dparams_s
@@ -1356,13 +1412,13 @@ def plot_nonstationary_pdfs(
     # Nonstationary GEV PDFs
     for i, t in enumerate(covariate.values):
         pdf_ns = genextreme.pdf(bins, shape, loc=loc[i], scale=scale[i])
-        ax.plot(bins, pdf_ns, lw=1.6, c=colors[i], zorder=0, label=t)
+        ax.plot(bins, pdf_ns, lw=2.2, c=colors[i], zorder=0, label=t)
 
     ax.set_xlabel(units)
     ax.set_ylabel("Probability")
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.legend(loc="upper right", bbox_to_anchor=(1, 1), framealpha=0.3)
+    ax.legend(loc="upper right", bbox_to_anchor=(1, 1), framealpha=0.3, fontsize=13.5)
     ax.set_xmargin(1e-3)
 
     if outfile:
@@ -1756,6 +1812,18 @@ def _main():
             ds = ds.drop_vars("month")
         else:
             ds = ds.where(ds[args.lead_dim] >= args.min_lead)
+    # Mask lead times below min_lead
+    if args.min_lead:
+        min_lead = int(args.min_lead)
+        ds = ds.where(ds[args.lead_dim] >= min_lead)
+
+    elif args.min_lead_file:
+        # Load min_lead from file
+        ds_min_lead = fileio.open_dataset(args.min_lead_file, **args.min_lead_kwargs)
+        min_lead = ds_min_lead["min_lead"].load()
+
+        ds = ds.groupby(f"{args.init_dim}.month").where(ds[args.lead_dim] >= min_lead)
+        ds = ds.drop_vars("month")
 
     # Stack ensemble, init and lead dimensions along new "sample" dimension
     if args.stack_dims:
