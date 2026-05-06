@@ -330,12 +330,20 @@ def _parse_command_line():
     )
     parser.add_argument(
         "--min_lead",
+        type=int,
         default=None,
-        help="Minimum lead time to include in analysis (int or filename)",
+        help="Minimum lead time to include in analysis",
     )
     parser.add_argument(
-        "--min_lead_kwargs",
+        "--min_lead_file",
+        type=str,
+        default=None,
+        help="Name of file containing the minimum lead time to include in analysis",
+    )
+    parser.add_argument(
+        "--min_lead_file_kwargs",
         nargs="*",
+        default={},
         action=general_utils.store_dict,
         help="Optional fileio.open_dataset kwargs for lead independence (e.g., spatial_agg=median)",
     )
@@ -360,18 +368,18 @@ def _main():
 
     # Mask lead times below min_lead
     if args.min_lead:
-        if isinstance(args.min_lead, str):
-            # Load min_lead from file
-            ds_min_lead = fileio.open_dataset(args.min_lead, **args.min_lead_kwargs)
-            min_lead = ds_min_lead["min_lead"].load()
-            # Assumes min_lead has only one init month
-            assert min_lead.month.size == 1, "Not implemented for multiple init months"
-            min_lead = min_lead.drop_vars("month")
-            if min_lead.size == 1:
-                min_lead = min_lead.item()
-        else:
-            min_lead = args.min_lead
+        min_lead = int(args.min_lead)
         da_fcst = da_fcst.where(da_fcst[args.lead_dim] >= min_lead)
+
+    elif args.min_lead_file:
+        # Load min_lead from file
+        ds_min_lead = fileio.open_dataset(args.min_lead_file, **args.min_lead_kwargs)
+        min_lead = ds_min_lead["min_lead"].load()
+
+        da_fcst = da_fcst.groupby(f"{args.init_dim}.month").where(
+            da_fcst[args.lead_dim] >= min_lead
+        )
+        da_fcst = da_fcst.drop_vars("month")
 
     ds_obs = fileio.open_dataset(args.obs_file)
     da_obs = ds_obs[args.var].dropna("time")

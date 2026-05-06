@@ -1735,15 +1735,23 @@ def _parse_command_line():
         "--covariate_file", type=str, default=None, help="Covariate file"
     )  # todo: test this
     parser.add_argument(
-        "--min_lead", default=None, help="Minimum lead time (int or filename)"
+        "--min_lead",
+        type=int,
+        default=None,
+        help="Minimum lead time to include in analysis",
     )
     parser.add_argument(
-        "--min_lead_kwargs",
+        "--min_lead_file",
         type=str,
+        default=None,
+        help="Name of file containing the minimum lead time to include in analysis",
+    )
+    parser.add_argument(
+        "--min_lead_file_kwargs",
         nargs="*",
         default={},
         action=general_utils.store_dict,
-        help="Keyword arguments for opening min_lead file",
+        help="Optional fileio.open_dataset kwargs for lead independence (e.g., spatial_agg=median)",
     )
     parser.add_argument(
         "--drop_max",
@@ -1800,18 +1808,6 @@ def _main():
     if args.reference_time_period:
         ds = time_utils.select_time_period(ds, args.reference_time_period)
 
-    # Filter data by minimum lead time
-    if args.min_lead:
-        if isinstance(args.min_lead, str):
-            # Load min_lead from file
-            ds_min_lead = fileio.open_dataset(args.min_lead, **args.min_lead_kwargs)
-            min_lead = ds_min_lead["min_lead"].load()
-            ds = ds.groupby(f"{args.init_dim}.month").where(
-                ds[args.lead_dim] >= min_lead
-            )
-            ds = ds.drop_vars("month")
-        else:
-            ds = ds.where(ds[args.lead_dim] >= args.min_lead)
     # Mask lead times below min_lead
     if args.min_lead:
         min_lead = int(args.min_lead)

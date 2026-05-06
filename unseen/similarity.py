@@ -317,13 +317,19 @@ def _parse_command_line():
     )
     parser.add_argument(
         "--min_lead",
+        type=int,
         default=None,
-        help="Minimum lead time to include in analysis (int or filename)",
+        help="Minimum lead time to include in analysis",
     )
     parser.add_argument(
-        "--min_lead_kwargs",
-        nargs="*",
+        "--min_lead_file",
         type=str,
+        default=None,
+        help="Name of file containing the minimum lead time to include in analysis",
+    )
+    parser.add_argument(
+        "--min_lead_file_kwargs",
+        nargs="*",
         default={},
         action=general_utils.store_dict,
         help="Optional fileio.open_dataset kwargs for lead independence (e.g., spatial_agg=median)",
@@ -366,18 +372,20 @@ def _main():
         start_date, end_date = args.reference_time_period
         ds_obs = ds_obs.sel({args.time_dim: slice(start_date, end_date)})
 
+    # Mask lead times below min_lead
     if args.min_lead:
-        if isinstance(args.min_lead, str):
-            # Load min_lead from file
-            ds_min_lead = fileio.open_dataset(args.min_lead, **args.min_lead_kwargs)
-            min_lead = ds_min_lead["min_lead"].load()
-            ds_fcst = ds_fcst.groupby(f"{args.init_dim}.month").where(
-                ds_fcst[args.lead_dim] >= min_lead
-            )
-            ds_fcst = ds_fcst.drop_vars("month")
-        else:
-            min_lead = args.min_lead
-            ds_fcst = ds_fcst.where(ds_fcst[args.lead_dim] >= min_lead)
+        min_lead = int(args.min_lead)
+        ds_fcst = ds_fcst.where(ds_fcst[args.lead_dim] >= min_lead)
+
+    elif args.min_lead_file:
+        # Load min_lead from file
+        ds_min_lead = fileio.open_dataset(args.min_lead_file, **args.min_lead_kwargs)
+        min_lead = ds_min_lead["min_lead"].load()
+
+        ds_fcst = ds_fcst.groupby(f"{args.init_dim}.month").where(
+            ds_fcst[args.lead_dim] >= min_lead
+        )
+        ds_fcst = ds_fcst.drop_vars("month")
 
     ds_similarity = similarity_tests(
         ds_fcst,
